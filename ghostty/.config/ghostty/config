@@ -1,0 +1,21 @@
+# Core appearance
+theme = Catppuccin Frappe
+font-family = JetBrainsMono Nerd Font
+font-style = bold
+font-size = 16
+cursor-style = block
+cursor-style-blink = false
+
+# Keybinds
+keybind = global:cmd+backquote=toggle_quick_terminal
+
+# Quick terminal
+quick-terminal-position = right
+quick-terminal-size = 40%
+quick-terminal-animation-duration = 0
+
+# Nicer tmux
+window-step-resize = true
+window-padding-balance = true
+window-show-tab-bar = never
+title = " "
