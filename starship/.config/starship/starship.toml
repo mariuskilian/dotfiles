@@ -46,7 +46,7 @@ symbol = ' '
 [java]
 style = 'fg:orange'
 symbol = ' '
-format = '[${symbol}${version )]($style)'
+format = '[${symbol}${version }]($style)'
 
 [python]
 style = 'teal'
