@@ -18,4 +18,5 @@ quick-terminal-animation-duration = 0
 window-step-resize = true
 window-padding-balance = true
 window-show-tab-bar = never
+macos-titlebar-proxy-icon = hidden
 title = " "
