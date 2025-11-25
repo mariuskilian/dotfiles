@@ -2,7 +2,7 @@
 theme = Catppuccin Frappe
 font-family = JetBrainsMono Nerd Font
 font-style = bold
-font-size = 16
+font-size = 18
 cursor-style = block
 cursor-style-blink = false
 
