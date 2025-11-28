@@ -16,3 +16,17 @@ ZSH_HIGHLIGHT_STYLES[path_prefix]=none
 
 # Shift tab to accept auto suggestions
 bindkey '^[[Z' 	autosuggest-accept	# tab	  	| autosuggest
+
+# Git aliases
+alias gs="git status"
+alias gw="git switch"
+alias gl="git log"
+alias gln="git log --oneline -n"
+alias ga="git add"
+alias gc="git commit"
+alias gca="git commit --amend"
+alias gcane="git commit --amend --no-edit"
+alias gpush="git push"
+alias gp="git pull"
+alias gf="git fetch"
+alias gitalias="alias | grep 'git'"
