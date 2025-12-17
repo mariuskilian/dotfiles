@@ -4,6 +4,19 @@
 vim.g.mapleader = ' '
 vim.g.maplocalleader = ' '
 
+-- Better window navigation
+vim.keymap.set("n", "<C-h>", "<C-w><C-h>", { desc = "Move focus to the left window" })
+vim.keymap.set("n", "<C-l>", "<C-w><C-l>", { desc = "Move focus to the right window" })
+vim.keymap.set("n", "<C-j>", "<C-w><C-j>", { desc = "Move focus to the lower window" })
+vim.keymap.set("n", "<C-k>", "<C-w><C-k>", { desc = "Move focus to the upper window" })
+
+-- Easily split windows
+vim.keymap.set("n", "<leader>wv", ":vsplit<CR>", { desc = "[w]indow split [v]ertical" })
+vim.keymap.set("n", "<leader>wh", ":split<CR>", { desc = "[w]indow split [h]orizontal" })
+
+-- Stay in indent mode
+vim.keymap.set("v", "<", "<gv", { desc = "Indent left in visual mode" })
+
 -- For conciseness
 local opts = { noremap = true, silent = true }
 
@@ -55,8 +68,8 @@ vim.keymap.set('n', '<leader>+', '<C-a>', opts) -- increment
 vim.keymap.set('n', '<leader>-', '<C-x>', opts) -- decrement
 
 -- Window management
-vim.keymap.set('n', '<leader>v', '<C-w>v', opts) -- split window vertically
-vim.keymap.set('n', '<leader>h', '<C-w>s', opts) -- split window horizontally
+vim.keymap.set('n', '<leader>wv', ':vsplit', { desc = "[w]indow split [v]ertical" })
+vim.keymap.set('n', '<leader>wh', ':hsplit', { desc = "[w]indow split [h]orizontal" })
 vim.keymap.set('n', '<leader>se', '<C-w>=', opts) -- make split windows equal width & height
 vim.keymap.set('n', '<leader>xs', ':close<CR>', opts) -- close current split window
 
