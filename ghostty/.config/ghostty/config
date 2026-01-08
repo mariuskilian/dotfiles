@@ -6,9 +6,6 @@ font-size = 18
 cursor-style = block
 cursor-style-blink = false
 
-# Keybinds
-keybind = global:cmd+backquote=toggle_quick_terminal
-
 # Quick terminal
 quick-terminal-position = right
 quick-terminal-size = 40%
