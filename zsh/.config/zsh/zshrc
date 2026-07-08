@@ -30,3 +30,6 @@ alias gpush="git push"
 alias gp="git pull"
 alias gf="git fetch"
 alias gitalias="alias | grep 'git'"
+
+# Machine-local overrides
+[[ -f ~/.zshrc ]] && source ~/.zshrc
