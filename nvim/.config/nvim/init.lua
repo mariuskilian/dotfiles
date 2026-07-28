@@ -1,33 +1,42 @@
-require 'config.options'
-require 'config.keymaps'
+-- Declare the path where lazy will clone plugin code
+local lazypath = vim.fn.stdpath("data") .. "/lazy/lazy.nvim"
 
-local lazypath = vim.fn.stdpath 'data' .. '/lazy/lazy.nvim'
+-- Check to see if lazy itself has been cloned, if not clone it into the lazy.nvim directory
 if not (vim.uv or vim.loop).fs_stat(lazypath) then
-  local lazyrepo = 'https://github.com/folke/lazy.nvim.git'
-  local out = vim.fn.system { 'git', 'clone', '--filter=blob:none', '--branch=stable', lazyrepo, lazypath }
-  if vim.v.shell_error ~= 0 then
-    error('Error cloning lazy.nvim:\n' .. out)
-  end
+	vim.fn.system({
+		"git",
+		"clone",
+		"--filter=blob:none",
+		"https://github.com/folke/lazy.nvim.git",
+		"--branch=stable", -- latest stable release
+		lazypath,
+	})
 end
 
-local rtp = vim.opt.rtp
-rtp:prepend(lazypath)
+-- Add the path to the lazy plugin repositories to the vim runtime path
+vim.opt.rtp:prepend(lazypath)
 
-require('lazy').setup({
-  {
-    "nvim-neo-tree/neo-tree.nvim",
-    branch = "v3.x",
-    dependencies = {
-      "nvim-lua/plenary.nvim",
-      "MunifTanjim/nui.nvim",
-      "nvim-tree/nvim-web-devicons", -- optional, but recommended
-    },
-    lazy = false, -- neo-tree will lazily load itself
-  },
-  { "catppuccin/nvim", name = "catppuccin", priority = 1000,
-	config = function()
-	-- setup must be called before loading
-vim.cmd.colorscheme "catppuccin-frappe"
-	end
-  }
-})
+-- Declare a few options for lazy
+local opts = {
+	change_detection = {
+		-- Don't notify us every time a change is made to the configuration
+		notify = false,
+	},
+	checker = {
+		-- Automatically check for package updates
+		enabled = true,
+		-- Don't spam us with notification every time there is an update available
+		notify = false,
+	},
+}
+
+-- Load the options from the config/options.lua file
+require("config.options")
+-- Load the keymaps from the config/keymaps.lua file
+require("config.keymaps")
+-- Load the auto commands from the config/autocmds.lua file
+require("config.autocmds")
+-- Setup lazy, this should always be last
+-- Tell lazy that all plugin specs are found in the plugins directory
+-- Pass it the options we specified above
+require("lazy").setup("plugins", opts)

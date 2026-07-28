@@ -30,6 +30,7 @@ alias gpush="git push"
 alias gp="git pull"
 alias gf="git fetch"
 alias gitalias="alias | grep 'git'"
+alias gitfetchall='for dir in ~/wise/*/; do [ -d "$dir/.git" ] && echo "Fetching in $(basename $dir)..." && git -C "$dir" fetch --all --prune; done'
 
 # Machine-local overrides
 [[ -f ~/.zshrc ]] && source ~/.zshrc
