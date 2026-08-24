@@ -14,5 +14,6 @@ quick-terminal-animation-duration = 0
 # Nicer tmux
 window-step-resize = true
 window-padding-balance = true
-window-show-tab-bar = always
+macos-titlebar-style = tabs
 macos-titlebar-proxy-icon = hidden
+shell-integration-features = no-cursor
