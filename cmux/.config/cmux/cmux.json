@@ -8,6 +8,31 @@
   // cmux creates this template on launch when ~/.config/cmux/cmux.json is missing.
   // Legacy settings.json files are read only as fallback for keys not present here.
 
+  // ---- File-managed settings (synced via dotfiles). Mirrors this machine's customized values. ----
+  "app": {
+    "appearance": "dark",
+    "appIcon": "dark",
+    "newWorkspacePlacement": "top"
+  },
+
+  "sidebar": {
+    "showBranchDirectory": false,
+    "branchLayout": "vertical"
+  },
+
+  "sidebarAppearance": {
+    "tintColor": "#000000",
+    "tintOpacity": 0.18,
+    "matchTerminalBackground": true
+  },
+
+  "workspaceColors": {
+    "indicatorStyle": "leftRail",
+    "selectionColor": "#4A5A80",
+    "notificationBadgeColor": "#4A5A80"
+  },
+
+  // ---- Reference template below (commented = falls back to in-app Settings) ----
   //   "app" : {
   //     "appIcon" : "automatic",
   //     "sendAnonymousTelemetry" : true,
