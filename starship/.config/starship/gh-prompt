@@ -1,0 +1,146 @@
+#!/bin/bash
+# Starship custom-module helper for GitHub CLI state of the current branch.
+#
+#   gh-prompt pr      PR number, state icon (open/draft/merged/closed) and review (✓ approved, ✗ changes requested)
+#   gh-prompt stack   position in a `gh stack` stack, plus alert icon = needs restack, sync icon = gh stack rebase paused
+#
+# Everything on the prompt path is local. The one network call (`gh pr view`) runs detached
+# and writes to <git-common-dir>/gh-prompt/, so PR info shows up one prompt after it's fetched.
+# GH_PROMPT_TTL (seconds, default 60) controls how often it's refreshed.
+
+mode=$1
+ttl=${GH_PROMPT_TTL:-60}
+
+# Nerd Font octicons
+ICON_PR=$'\xef\x90\x87'         # U+F407 git-pull-request
+ICON_DRAFT=$'\xef\x93\x9d'      # U+F4DD git-pull-request-draft
+ICON_MERGED=$'\xef\x90\x99'     # U+F419 git-merge
+ICON_CLOSED=$'\xef\x93\x9c'     # U+F4DC git-pull-request-closed
+ICON_STACK=$'\xef\x94\x9e'      # U+F51E stack
+ICON_ALERT=$'\xef\x90\xa1'      # U+F421 alert
+ICON_SYNC=$'\xef\x91\xaa'       # U+F46A sync
+
+# Locate the git dirs by hand: every `git` call through the macOS /usr/bin/git shim costs ~15ms.
+dir=$PWD
+while [ ! -e "$dir/.git" ]; do
+  [ -n "$dir" ] || exit 0
+  dir=${dir%/*}
+done
+gitdir=$dir/.git
+if [ -f "$gitdir" ]; then # worktree or submodule: "gitdir: <path>"
+  read -r gitdir < "$gitdir"
+  gitdir=${gitdir#gitdir: }
+  case $gitdir in /*) ;; *) gitdir=$dir/$gitdir ;; esac
+fi
+common=$gitdir
+if [ -f "$gitdir/commondir" ]; then
+  read -r common < "$gitdir/commondir"
+  case $common in /*) ;; *) common=$gitdir/$common ;; esac
+fi
+
+# Branch being worked on; mid-rebase HEAD is detached, so take it from the rebase state instead.
+if [ -f "$gitdir/rebase-merge/head-name" ]; then
+  read -r head < "$gitdir/rebase-merge/head-name"
+elif [ -f "$gitdir/rebase-apply/head-name" ]; then
+  read -r head < "$gitdir/rebase-apply/head-name"
+else
+  read -r head < "$gitdir/HEAD"
+  head=${head#ref: }
+fi
+case $head in
+  refs/heads/*) branch=${head#refs/heads/} ;;
+  *) exit 0 ;;
+esac
+
+stack_file=$common/gh-stack
+
+# Prints "<pr>:<pos>:<total>:<parent>" for the stack containing $branch, counting only branches whose
+# PR hasn't merged (pos 0 = this branch's PR merged). ':' is safe as a separator: git forbids it in refs.
+stack_info() {
+  [ -f "$stack_file" ] || return
+  jq -r --arg b "$branch" '
+    first(.stacks[] | select(any(.branches[]; .branch == $b))) as $s
+    | ($s.branches | map(select(.pullRequest.merged | not) | .branch)) as $open
+    | ($open | index($b)) as $i
+    | [ ($s.branches[] | select(.branch == $b) | .pullRequest.number // ""),
+        (if $i then $i + 1 else 0 end),
+        ($open | length),
+        (if $i and $i > 0 then $open[$i - 1] else "" end) ]
+    | map(tostring) | join(":")' "$stack_file" 2>/dev/null
+}
+
+stack() {
+  IFS=: read -r _ pos total parent <<< "$(stack_info)"
+  [ -n "$total" ] || exit 0
+
+  if [ "$pos" -eq 0 ]; then out="$ICON_STACK merged"; else out="$ICON_STACK $pos/$total"; fi
+  # Parent's tip missing from this branch = something below changed and this one needs restacking.
+  if [ -n "$parent" ]; then
+    git merge-base --is-ancestor "refs/heads/$parent" "refs/heads/$branch" 2>/dev/null
+    [ $? -eq 1 ] && out="$out $ICON_ALERT"
+  fi
+  [ -f "$common/gh-stack-rebase-state" ] && out="$out $ICON_SYNC restacking"
+  printf '%s' "$out"
+}
+
+refresh() {
+  local merge target line err="$cache.err.$$"
+  merge=$(git config --get "branch.$branch.merge")
+  case $merge in
+    refs/pull/*/head) target=${merge#refs/pull/}; target=${target%/head} ;; # fork PR via gh pr checkout
+    refs/heads/*) target=${merge#refs/heads/} ;;
+    *) target=$branch ;;
+  esac
+  if line=$(GH_PROMPT_DISABLED=1 gh pr view "$target" --json number,state,isDraft,reviewDecision \
+      --jq '[.number, .state, .isDraft, (.reviewDecision // "")] | map(tostring) | join(":")' 2>"$err"); then
+    :
+  elif grep -q 'no pull requests found' "$err"; then
+    line=":::"
+  else
+    rm -f "$err"; return # offline/auth trouble: keep the previous answer
+  fi
+  rm -f "$err"
+  printf '%s:%s\n' "$(date +%s)" "$line" > "$cache.tmp.$$" && mv "$cache.tmp.$$" "$cache"
+}
+
+pr() {
+  case $branch in master|main) exit 0 ;; esac
+  if [ -f "$common/refs/remotes/origin/HEAD" ]; then
+    read -r default < "$common/refs/remotes/origin/HEAD"
+    [ "${default#ref: refs/remotes/origin/}" = "$branch" ] && exit 0
+  fi
+
+  cache=$common/gh-prompt/${branch//\//%}
+  ts=0 number= state= draft= review=
+  [ -f "$cache" ] && IFS=: read -r ts number state draft review < "$cache"
+
+  now=${EPOCHSECONDS:-$(date +%s)}
+  if [ $((now - ${ts:-0})) -ge "$ttl" ] && command -v gh >/dev/null && grep -q 'github\.com' "$common/config"; then
+    mkdir -p "${cache%/*}"
+    # Bump the timestamp before fetching so the prompts in between don't each spawn a fetch.
+    printf '%s:%s:%s:%s:%s\n' "$now" "$number" "$state" "$draft" "$review" > "$cache"
+    (refresh) </dev/null >/dev/null 2>&1 &
+  fi
+
+  # Stack branches know their PR number locally, so they can show it before the first fetch lands.
+  [ -n "$number" ] || IFS=: read -r number _ <<< "$(stack_info)"
+  [ -n "$number" ] || exit 0
+
+  case $state in
+    MERGED) icon=$ICON_MERGED ;;
+    CLOSED) icon=$ICON_CLOSED ;;
+    *) if [ "$draft" = true ]; then icon=$ICON_DRAFT; else icon=$ICON_PR; fi ;;
+  esac
+  case $state:$review in
+    OPEN:APPROVED) mark=' ✓' ;;
+    OPEN:CHANGES_REQUESTED) mark=' ✗' ;;
+    *) mark= ;;
+  esac
+  printf '%s #%s%s' "$icon" "$number" "$mark"
+}
+
+case $mode in
+  pr) pr ;;
+  stack) stack ;;
+  *) echo "usage: gh-prompt pr|stack" >&2; exit 2 ;;
+esac

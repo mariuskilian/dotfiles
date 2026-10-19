@@ -1,6 +1,9 @@
 format = """
 $directory\
 $git_branch\
+${custom.gh_pr}\
+${custom.gh_stack}\
+$git_state\
 $git_status\
 $fill\
 $java\
@@ -39,6 +42,30 @@ truncation_symbol = '…/'
 [git_status]
 style = 'fg:red'
 format = '([$all_status$ahead_behind]($style) )'
+
+# REBASING 2/5, MERGING, CHERRY-PICKING, ...
+[git_state]
+style = 'fg:yellow'
+format = '[$state( $progress_current/$progress_total) ]($style)'
+
+# PR of the current branch (incl. ones from `gh pr checkout`); see gh-prompt for the icons.
+# State is fetched in the background and cached, so it can lag a prompt behind.
+[custom.gh_pr]
+command = '. ~/.config/starship/gh-prompt pr'
+when = true
+require_repo = true
+shell = ['bash', '--noprofile', '--norc']
+style = 'fg:purple'
+format = '[$output ]($style)'
+
+# Position in a `gh stack` stack, counting unmerged branches from the trunk up.
+[custom.gh_stack]
+command = '. ~/.config/starship/gh-prompt stack'
+when = true
+require_repo = true
+shell = ['bash', '--noprofile', '--norc']
+style = 'fg:teal'
+format = '[$output ]($style)'
 
 [fill]
 symbol = ' '
