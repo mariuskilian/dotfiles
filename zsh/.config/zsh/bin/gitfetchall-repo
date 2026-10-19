@@ -1,0 +1,311 @@
+#!/usr/bin/env zsh
+#
+# Fetch one repo, park a side branch nobody is using, fast-forward its default
+# branch, take any commits a collaborator pushed to the current branch, and
+# rebase that branch onto the default branch when it can be done cleanly.
+#
+# Called once per repo by the gitfetchall function (see ../.zshrc). Prints one
+# line per repo (plus indented detail lines on failure) so that parallel
+# invocations don't produce interleaved output.
+#
+# Usage: gitfetchall-repo <repo-path>
+# Env:   GITFETCHALL_MODE  = fetch | ff | rebase   (default: rebase)
+#        GITFETCHALL_PARK  = 1 | 0                 (default: 1)
+#        GITFETCHALL_STALE_DAYS = N                (default: 28)
+#
+# Never discards local work: every branch update is either a fast-forward or a
+# rebase that applied without conflict, and parking commits the worktree before
+# leaving the branch. Anything else is reported and left untouched.
+
+emulate -L zsh
+zmodload -F zsh/datetime +p:EPOCHSECONDS 2>/dev/null || EPOCHSECONDS=$(date +%s)
+
+export GIT_EDITOR=:              # never block on an editor
+export GIT_TERMINAL_PROMPT=0     # fail instead of prompting in a background job
+
+repo=$1
+name=${repo:t}
+mode=${GITFETCHALL_MODE:-rebase}
+park=${GITFETCHALL_PARK:-1}
+stale_days=${GITFETCHALL_STALE_DAYS:-28}
+(( stale_days > 0 )) || park=0
+
+g() { command git -C "$repo" "$@" }
+
+typeset -a notes detail
+icon="✓"
+
+note()  { notes+=("$1") }
+warn()  { notes+=("$1"); [[ $icon == "✓" ]] && icon="⚠"; return 0 }
+short() { print -r -- "${1[1,9]}" }
+indent() { local -a l; l=("${(f)1}"); detail=("${l[@]/#/    }") }
+emit()  { print -rl -- "$icon $(printf '%-40s' $name) ${(j:; :)notes}" $detail; exit ${1:-0} }
+
+# ---------------------------------------------------------------- fetch -----
+if ! out=$(g fetch --all --prune 2>&1); then
+  icon="✗"; notes=("fetch failed"); indent "$out"
+  emit 1
+fi
+
+[[ $mode == fetch ]] && { note "fetched"; emit 0 }
+
+# ------------------------------------------------- resolve default branch ---
+resolve_default() {
+  local d=$(g symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)
+  print -r -- ${d#origin/}
+}
+have_remote_def() { g rev-parse --verify --quiet "refs/remotes/origin/$def" >/dev/null }
+
+def=$(resolve_default)
+# Repair a missing origin/HEAD, or a stale one left behind by a master -> main
+# rename (the old remote-tracking ref gets pruned, so the symref dangles).
+if [[ -z $def ]] || ! have_remote_def; then
+  g remote set-head origin --auto >/dev/null 2>&1
+  def=$(resolve_default)
+fi
+if [[ -z $def ]] || ! have_remote_def; then
+  warn "cannot determine default branch"
+  emit 0
+fi
+
+# ------------------------------------------------------- worktree state -----
+cur=$(g symbolic-ref --short -q HEAD) || cur=""          # empty => detached
+born=1; g rev-parse --verify --quiet HEAD >/dev/null || born=0
+clean=1; [[ -n $(g status --porcelain 2>/dev/null) ]] && clean=0
+# NB: --git-path alone returns a repo-relative path, and this script's cwd is
+# wherever xargs was invoked, so resolve against the absolute git dir.
+gitdir=$(g rev-parse --absolute-git-dir)
+busy=0
+for f in rebase-merge rebase-apply MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_LOG; do
+  [[ -e $gitdir/$f ]] && busy=1
+done
+
+# Reason no branch here can be touched right now, if any.
+blocked=""
+(( busy )) && blocked="operation in progress"
+(( born )) || blocked="no commits yet"
+
+# The branch this one tracks on the remote, if it still exists there.
+upstream() {
+  local u
+  u=$(g rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null) || return 1
+  [[ -n $u ]] || return 1
+  g rev-parse --verify --quiet "$u" >/dev/null || return 1
+  print -r -- "$u"
+}
+
+# ------------------------------------- park a branch nobody is using --------
+# A side branch with no new commits for $stale_days days is finished or
+# abandoned, and leaving it checked out means the next session starts from a
+# stale base. Commit whatever is sitting in the worktree -- so nothing is lost
+# and nothing gets dragged onto another branch -- then switch back to the
+# default branch and let the sections below treat this as a plain default-branch
+# checkout.
+#
+# Author date, not committer date: the rebase below rewrites committer dates, so
+# a branch gitfetchall has touched once would look fresh forever.
+park_stale() {
+  local last up ulast age wt out msg committed=0
+  last=$(g log -1 --format=%at HEAD 2>/dev/null)
+  [[ -n $last ]] || return 1
+  # Someone else pushing to this branch is activity too, even when my own last
+  # commit on it is ancient -- don't park a branch a colleague is working on.
+  up=$(upstream) || up=""
+  if [[ -n $up ]]; then
+    ulast=$(g log -1 --format=%at "$up" 2>/dev/null)
+    [[ -n $ulast ]] && (( ulast > last )) && last=$ulast
+  fi
+  age=$(( (EPOCHSECONDS - last) / 86400 ))
+  (( age >= stale_days )) || return 1
+
+  wt=$(g for-each-ref --format='%(worktreepath)' "refs/heads/$def")
+  if [[ -n $wt && ${wt:A} != ${repo:A} ]]; then
+    warn "$cur idle ${age}d, not parked ($def checked out in worktree ${wt:t})"
+    return 1
+  fi
+
+  if (( ! clean )); then
+    msg="WIP auto-commit on $cur (inactive ${age}d)
+
+Committed automatically by gitfetchall: no new commits on this branch for
+${age} days, so the worktree was returned to $def and these local changes were
+committed here instead of being left behind.
+
+Undo with: git switch $cur && git reset HEAD~"
+    if ! out=$(g add -A 2>&1); then
+      warn "$cur idle ${age}d, not parked (could not stage local changes)"
+      indent "$out"; return 1
+    fi
+    # Dirty in a way git won't commit (a dirty submodule, say) stages nothing.
+    if ! g diff --cached --quiet; then
+      if out=$(g commit --no-verify -m "$msg" 2>&1); then
+        committed=1
+      else
+        warn "$cur idle ${age}d, not parked (auto-commit failed)"
+        indent "$out"; return 1
+      fi
+    fi
+  fi
+
+  if ! out=$(g switch "$def" 2>&1); then
+    if (( committed )); then
+      warn "$cur idle ${age}d, WIP auto-committed but switch to $def FAILED"
+    else
+      warn "$cur idle ${age}d, not parked (switch to $def failed)"
+    fi
+    indent "$out"; return 1
+  fi
+
+  if (( committed )); then
+    warn "$cur parked: idle ${age}d, WIP auto-committed, now on $def"
+  else
+    note "$cur parked: idle ${age}d, now on $def"
+  fi
+  return 0
+}
+
+if (( park )) && [[ -z $blocked && -n $cur && $cur != $def ]]; then
+  if park_stale; then
+    cur=$(g symbolic-ref --short -q HEAD) || cur=""
+    clean=1; [[ -n $(g status --porcelain 2>/dev/null) ]] && clean=0
+  fi
+fi
+
+# ------------------------------------------- fast-forward default branch ----
+new=$(g rev-parse "refs/remotes/origin/$def")
+old=$(g rev-parse --verify --quiet "refs/heads/$def") || old=""
+defwt=$(g for-each-ref --format='%(worktreepath)' "refs/heads/$def")
+
+if [[ -n $blocked ]]; then
+  warn "$def left alone ($blocked)"
+elif [[ -z $old ]]; then
+  if g branch --track "$def" "origin/$def" >/dev/null 2>&1; then
+    note "$def created from origin/$def"
+  else
+    warn "$def could not be created"
+  fi
+elif [[ $old == $new ]]; then
+  note "$def up to date"
+elif ! g merge-base --is-ancestor "$old" "$new"; then
+  # Local default branch has commits of its own: a fast-forward would lose them.
+  warn "$def DIVERGED from origin/$def, left alone"
+elif [[ -n $defwt && ${defwt:A} != ${repo:A} ]]; then
+  warn "$def checked out in worktree ${defwt:t}, left alone"
+elif [[ $def == $cur ]]; then
+  if (( ! clean )); then
+    warn "$def left alone (dirty worktree)"
+  elif g merge --ff-only "origin/$def" >/dev/null 2>&1; then
+    note "$def ff $(short $old) -> $(short $new)"
+  else
+    warn "$def fast-forward failed"
+  fi
+else
+  # Not checked out anywhere: move the ref directly, compare-and-swap on $old.
+  if g update-ref -m "gitfetchall: fast-forward to origin/$def" \
+       "refs/heads/$def" "$new" "$old" 2>/dev/null; then
+    note "$def ff $(short $old) -> $(short $new)"
+  else
+    warn "$def update-ref failed"
+  fi
+fi
+
+[[ $mode == ff ]] && emit 0
+
+# ---------------------------------------------- sync with branch upstream ---
+# Someone else may be pushing to this branch. Take their commits first:
+# fast-forward when nothing local is in the way, otherwise replay the local-only
+# commits on top of theirs -- `git pull --rebase`, under the same no-conflict
+# rule as everything else here.
+#
+# Is anyone else committing to this branch? If the remote copy carries commits
+# that aren't mine, rebasing it onto the default branch would rewrite another
+# person's published work and demand a force-push, so that stays a manual
+# decision. Authorship, not "is the upstream ahead right now": the answer has to
+# hold on every later run too, or the next run undoes this one.
+branch_is_shared() {
+  local up me
+  up=$(upstream) || return 1
+  me=$(g config user.email)
+  [[ -n $me ]] || return 1                             # can't tell mine from theirs
+  # Committer as well as author: a colleague who rebases my branch keeps me as
+  # the author but becomes the committer.
+  [[ -n $(g log --format='%ae%n%ce' "$up" --not "refs/remotes/origin/$def" 2>/dev/null \
+            | grep -vxF "$me" | head -1) ]]
+}
+
+sync_upstream() {
+  local up out before gained mine
+  up=$(upstream) || return 0
+  g merge-base --is-ancestor "$up" HEAD && return 0     # nothing new upstream
+
+  # The upstream is also "ahead" of a branch this script rebased onto $def and
+  # that was never force-pushed -- it holds the pre-rebase copies of my own
+  # commits. Compare by patch, not by sha: only commits whose change isn't
+  # already on this branch are someone else's work worth taking.
+  gained=$(g rev-list --count --right-only --cherry-pick --no-merges "HEAD...$up")
+  (( gained )) || return 0
+
+  mine=$(g rev-list --count "$up..HEAD")
+
+  if (( ! mine )); then
+    if out=$(g merge --ff-only "$up" 2>&1); then
+      note "$cur synced +$gained from $up"
+    else
+      warn "$cur not synced (fast-forward from $up failed)"; indent "$out"
+    fi
+    return 0
+  fi
+
+  before=$(g rev-parse HEAD)
+  if out=$(g -c rebase.autoStash=false rebase "$up" 2>&1); then
+    note "$cur synced +$gained from $up, $mine local replayed on top (was $(short $before))"
+  else
+    g rebase --abort >/dev/null 2>&1
+    if [[ -e $gitdir/rebase-merge || -e $gitdir/rebase-apply ]]; then
+      icon="✗"; notes+=("$cur LEFT MID-REBASE onto $up, needs attention"); indent "$out"
+      emit 1
+    elif [[ $out == *CONFLICT* || $out == *"could not apply"* ]]; then
+      warn "$cur would conflict with $up, not synced"
+    else
+      warn "$cur sync from $up failed: ${${(f)out}[1]}"
+    fi
+  fi
+}
+
+shared=0
+if [[ -n $cur && $cur != $def && -z $blocked ]]; then
+  branch_is_shared && shared=1
+  (( clean )) && sync_upstream
+fi
+
+# ----------------------------------------------- rebase current branch ------
+if [[ -z $cur ]]; then
+  warn "detached HEAD, not rebased"
+elif [[ $cur == $def ]]; then
+  :                                          # already handled by the ff above
+elif [[ -n $blocked ]]; then
+  warn "$cur not rebased ($blocked)"
+elif (( ! clean )); then
+  warn "$cur not rebased (dirty worktree)"
+elif (( shared )); then
+  note "$cur not rebased (shared branch; rebasing onto origin/$def needs a force-push)"
+elif g merge-base --is-ancestor "refs/remotes/origin/$def" HEAD; then
+  note "$cur already on origin/$def"
+else
+  before=$(g rev-parse HEAD)
+  if out=$(g -c rebase.autoStash=false rebase "origin/$def" 2>&1); then
+    note "$cur rebased onto origin/$def (was $(short $before))"
+  else
+    g rebase --abort >/dev/null 2>&1
+    if [[ -e $gitdir/rebase-merge || -e $gitdir/rebase-apply ]]; then
+      icon="✗"; notes+=("$cur LEFT MID-REBASE, needs attention"); indent "$out"
+      emit 1
+    elif [[ $out == *CONFLICT* || $out == *"could not apply"* ]]; then
+      warn "$cur would conflict with origin/$def, not rebased"
+    else
+      warn "$cur rebase failed: ${${(f)out}[1]}"
+    fi
+  fi
+fi
+
+emit 0
