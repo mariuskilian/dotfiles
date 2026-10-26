@@ -1,3 +1,7 @@
+# Homebrew: keep auto-update, hide the "Adjust how often..." hints
+export HOMEBREW_NO_ENV_HINTS=1
+
+
 # Starship
 export STARSHIP_CONFIG=~/.config/starship/starship.toml
 eval "$(starship init zsh)"
